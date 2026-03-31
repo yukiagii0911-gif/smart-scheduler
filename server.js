@@ -12,8 +12,13 @@ app.use(express.json());
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// デスクトップを公開
-app.use(express.static(path.join(__dirname, "..")));
+// smart-ai フォルダ自体を静的公開
+app.use(express.static(__dirname));
+
+// / に来たら index.html を返す
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
 
 // 音声はメモリで受ける
 const upload = multer({ storage: multer.memoryStorage() });
