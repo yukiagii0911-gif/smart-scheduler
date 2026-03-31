@@ -1,8 +1,9 @@
 import express from "express";
 import cors from "cors";
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import path from "path";
 import { fileURLToPath } from "url";
+import multer from "multer";
 
 const app = express();
 app.use(cors());
@@ -14,9 +15,120 @@ const __dirname = path.dirname(__filename);
 // デスクトップを公開
 app.use(express.static(path.join(__dirname, "..")));
 
+// 音声はメモリで受ける
+const upload = multer({ storage: multer.memoryStorage() });
+
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+function extractJson(text) {
+  if (!text) return null;
+
+  const cleaned = text
+    .replace(/```json/g, "")
+    .replace(/```/g, "")
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      const slice = cleaned.slice(start, end + 1);
+      return JSON.parse(slice);
+    }
+    throw e;
+  }
+}
+
+function normalizeParsedData(parsed) {
+  const safe = parsed || {};
+
+  if (!Array.isArray(safe.tasks)) {
+    safe.tasks = [];
+  }
+
+  safe.tasks = safe.tasks.map((task) => ({
+    task: task?.task || "",
+    duration: Number.isFinite(Number(task?.duration)) ? Number(task.duration) : 0,
+    place: task?.place || "",
+    taskMemo: task?.taskMemo || "",
+    isFixed: Boolean(task?.isFixed),
+    fixedStart: task?.fixedStart || ""
+  }));
+
+  safe.dailyGoal = safe.dailyGoal || "";
+  safe.globalMemo = safe.globalMemo || "";
+  safe.longTermGoal = safe.longTermGoal || "";
+  safe.routineText = safe.routineText || "";
+  safe.wakeTime = safe.wakeTime || "";
+  safe.sleepTime = safe.sleepTime || "";
+
+  return safe;
+}
+
+async function parseTranscriptToScheduleJson(transcript, selectedDate = "") {
+  const prompt = `
+あなたは音声メモをスケジュール入力フォーム用のJSONに整理するAIです。
+ユーザーが話した内容を読み取り、以下のJSONだけを返してください。
+説明文、補足、コードブロックは禁止です。
+
+前提:
+- 現在ユーザーが選択している日付は ${selectedDate || "不明"} です
+- 「明日」「来週水曜」など相対表現は、可能なら選択日付を基準に解釈する
+- 日付が明確に別日なら taskMemo にその日付情報を短く残す
+- 複数の予定がある場合は tasks に複数入れる
+- 「何月何日の何時からどこどこで何をする」があれば fixed task とみなす
+- fixedStart は開始時刻だけ入れる
+- 終了時刻しか分からない場合は taskMemo に入れる
+- duration は分かるときだけ分単位整数、分からなければ 0
+
+出力形式:
+{
+  "dailyGoal": "文字列",
+  "globalMemo": "文字列",
+  "longTermGoal": "文字列",
+  "routineText": "文字列",
+  "wakeTime": "HH:MM または 空文字",
+  "sleepTime": "HH:MM または 空文字",
+  "tasks": [
+    {
+      "task": "文字列",
+      "duration": 数値または0,
+      "place": "文字列",
+      "taskMemo": "文字列",
+      "isFixed": true または false,
+      "fixedStart": "HH:MM または 空文字"
+    }
+  ]
+}
+
+ルール:
+- 情報がなければ空文字にする
+- tasks がなければ空配列
+- 「3時」「15時」「午後3時」などは24時間表記のHH:MMにする
+- 「朝7時半」は07:30
+- 毎日の習慣なら routineText に寄せる
+- 今日やるべきことなら tasks や dailyGoal に寄せる
+- 状態や注意事項は globalMemo に寄せる
+- 長期的な話は longTermGoal に寄せる
+- 同じ内容を複数欄に重複させすぎない
+- 必ずJSONだけを返す
+
+ユーザー音声:
+${transcript}
+`;
+
+  const response = await client.responses.create({
+    model: "gpt-5.4",
+    input: prompt
+  });
+
+  const parsed = extractJson(response.output_text);
+  return normalizeParsedData(parsed);
+}
 
 app.post("/ai", async (req, res) => {
   const {
@@ -100,6 +212,57 @@ ${JSON.stringify(tasks || [], null, 2)}
   }
 });
 
-app.listen(3000, () => {
-  console.log("Server running on http://localhost:3000");
+app.post("/ai-parse", async (req, res) => {
+  const { transcript, selectedDate } = req.body;
+
+  if (!transcript || !transcript.trim()) {
+    return res.status(400).json({ error: "transcript is required" });
+  }
+
+  try {
+    const parsed = await parseTranscriptToScheduleJson(transcript, selectedDate || "");
+    res.json({ parsed });
+  } catch (e) {
+    console.error("OpenAI parse error:", e);
+    res.status(500).json({ error: e.message || "parse error" });
+  }
+});
+
+app.post("/voice", upload.single("audio"), async (req, res) => {
+  const selectedDate = req.body?.selectedDate || "";
+
+  if (!req.file) {
+    return res.status(400).json({ error: "audio file is required" });
+  }
+
+  try {
+    const originalName = req.file.originalname || "recording.webm";
+    const mimeType = req.file.mimetype || "audio/webm";
+
+    const fileForOpenAI = await toFile(req.file.buffer, originalName, {
+      type: mimeType
+    });
+
+    const transcription = await client.audio.transcriptions.create({
+      file: fileForOpenAI,
+      model: "gpt-4o-transcribe"
+    });
+
+    const transcript = transcription.text || "";
+    const parsed = await parseTranscriptToScheduleJson(transcript, selectedDate);
+
+    res.json({
+      transcript,
+      parsed
+    });
+  } catch (e) {
+    console.error("Voice transcription error:", e);
+    res.status(500).json({ error: e.message || "voice error" });
+  }
+});
+
+const PORT = 3000;
+
+app.listen(PORT, "127.0.0.1", () => {
+  console.log(`Server running on http://127.0.0.1:${PORT}`);
 });
