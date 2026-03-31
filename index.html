@@ -498,8 +498,9 @@
     </div>
   </div>
 
-  <script>
-    const STORAGE_KEY = "smartSchedulerCalendarV1";
+  
+<script>
+    const STORAGE_KEY = "smartSchedulerCalendarV2";
     let tasks = [];
     let currentMonth = null;
 
@@ -536,10 +537,15 @@
         sleepTime: "23:30",
         dailyGoal: "",
         globalMemo: "",
-        longTermGoal: "",
-        routineText: "",
         tasks: [],
         scheduleItems: []
+      };
+    }
+
+    function getDefaultGlobalData() {
+      return {
+        longTermGoal: "",
+        routineText: ""
       };
     }
 
@@ -549,6 +555,7 @@
       if (!raw) {
         const initial = {
           selectedDate: getTodayString(),
+          global: getDefaultGlobalData(),
           dates: {}
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
@@ -559,10 +566,14 @@
         const parsed = JSON.parse(raw);
         if (!parsed.selectedDate) parsed.selectedDate = getTodayString();
         if (!parsed.dates) parsed.dates = {};
+        if (!parsed.global) parsed.global = getDefaultGlobalData();
+        if (typeof parsed.global.longTermGoal !== "string") parsed.global.longTermGoal = "";
+        if (typeof parsed.global.routineText !== "string") parsed.global.routineText = "";
         return parsed;
       } catch (e) {
         const reset = {
           selectedDate: getTodayString(),
+          global: getDefaultGlobalData(),
           dates: {}
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(reset));
@@ -586,7 +597,8 @@
       return {
         appData,
         selectedDate,
-        dateData: appData.dates[selectedDate]
+        dateData: appData.dates[selectedDate],
+        globalData: appData.global
       };
     }
 
@@ -595,8 +607,6 @@
       return Boolean(
         (dateData.dailyGoal && dateData.dailyGoal.trim()) ||
         (dateData.globalMemo && dateData.globalMemo.trim()) ||
-        (dateData.longTermGoal && dateData.longTermGoal.trim()) ||
-        (dateData.routineText && dateData.routineText.trim()) ||
         (Array.isArray(dateData.tasks) && dateData.tasks.length) ||
         (Array.isArray(dateData.scheduleItems) && dateData.scheduleItems.length)
       );
@@ -646,6 +656,15 @@
       stopMediaTracks();
     }
 
+    function saveGlobalSettings() {
+      const appData = loadAppData();
+      appData.global = {
+        longTermGoal: document.getElementById("longTermGoal").value.trim(),
+        routineText: document.getElementById("routineText").value.trim()
+      };
+      saveAppData(appData);
+    }
+
     function mergeParsedData(parsed) {
       if (!parsed) return;
 
@@ -653,8 +672,16 @@
       if (parsed.sleepTime) document.getElementById("sleepTime").value = parsed.sleepTime;
       if (parsed.dailyGoal) document.getElementById("dailyGoal").value = parsed.dailyGoal;
       if (parsed.globalMemo) document.getElementById("globalMemo").value = parsed.globalMemo;
-      if (parsed.longTermGoal) document.getElementById("longTermGoal").value = parsed.longTermGoal;
-      if (parsed.routineText) document.getElementById("routineText").value = parsed.routineText;
+
+      if (parsed.longTermGoal) {
+        document.getElementById("longTermGoal").value = parsed.longTermGoal;
+        saveGlobalSettings();
+      }
+
+      if (parsed.routineText) {
+        document.getElementById("routineText").value = parsed.routineText;
+        saveGlobalSettings();
+      }
 
       if (Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
         parsed.tasks.forEach((task) => {
@@ -802,8 +829,6 @@
         sleepTime: document.getElementById("sleepTime").value,
         dailyGoal: document.getElementById("dailyGoal").value.trim(),
         globalMemo: document.getElementById("globalMemo").value.trim(),
-        longTermGoal: document.getElementById("longTermGoal").value.trim(),
-        routineText: document.getElementById("routineText").value.trim(),
         tasks: tasks
       };
 
@@ -812,15 +837,15 @@
     }
 
     function loadCurrentDateIntoForm() {
-      const { selectedDate, dateData } = getCurrentDateData();
+      const { selectedDate, dateData, globalData } = getCurrentDateData();
 
       document.getElementById("selectedDateText").textContent = formatDateJP(selectedDate);
       document.getElementById("wakeTime").value = dateData.wakeTime || "07:00";
       document.getElementById("sleepTime").value = dateData.sleepTime || "23:30";
       document.getElementById("dailyGoal").value = dateData.dailyGoal || "";
       document.getElementById("globalMemo").value = dateData.globalMemo || "";
-      document.getElementById("longTermGoal").value = dateData.longTermGoal || "";
-      document.getElementById("routineText").value = dateData.routineText || "";
+      document.getElementById("longTermGoal").value = globalData.longTermGoal || "";
+      document.getElementById("routineText").value = globalData.routineText || "";
       tasks = Array.isArray(dateData.tasks) ? dateData.tasks : [];
 
       document.getElementById("task").value = "";
@@ -959,8 +984,6 @@
         sleepTime: document.getElementById("sleepTime").value,
         dailyGoal: document.getElementById("dailyGoal").value.trim(),
         globalMemo: document.getElementById("globalMemo").value.trim(),
-        longTermGoal: document.getElementById("longTermGoal").value.trim(),
-        routineText: document.getElementById("routineText").value.trim(),
         tasks: tasks,
         scheduleItems: items
       };
@@ -1003,6 +1026,7 @@
 
     async function generateAI() {
       saveCurrentDateData();
+      saveGlobalSettings();
 
       document.getElementById("scheduleView").innerHTML = `
         <div class="schedule-head">
@@ -1046,6 +1070,7 @@
 
     function selectDate(dateStr) {
       saveCurrentDateData();
+      saveGlobalSettings();
       const appData = loadAppData();
       appData.selectedDate = dateStr;
       saveAppData(appData);
@@ -1131,8 +1156,9 @@
     document.getElementById("sleepTime").addEventListener("change", saveCurrentDateData);
     document.getElementById("dailyGoal").addEventListener("input", saveCurrentDateData);
     document.getElementById("globalMemo").addEventListener("input", saveCurrentDateData);
-    document.getElementById("longTermGoal").addEventListener("input", saveCurrentDateData);
-    document.getElementById("routineText").addEventListener("input", saveCurrentDateData);
+    document.getElementById("longTermGoal").addEventListener("input", saveGlobalSettings);
+    document.getElementById("routineText").addEventListener("input", saveGlobalSettings);
   </script>
+
 </body>
 </html>
